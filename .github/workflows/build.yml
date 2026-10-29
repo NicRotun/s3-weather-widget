@@ -1,0 +1,461 @@
+name: Compila APK Galaxy S3 Weather
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 1. Scarica repository
+        uses: actions/checkout@v4
+
+      - name: 2. Estrai ZIP e genera progetto Android completo
+        run: |
+          mkdir -p app/src/main/assets
+          mkdir -p app/src/main/res/drawable
+          mkdir -p app/src/main/res/layout
+          mkdir -p app/src/main/res/xml
+          mkdir -p app/src/main/java/com/example/s3weatherwidget
+
+          # Trova ed estrae il file ZIP caricato
+          ZIP_FILE=$(find . -maxdepth 2 -name "*.zip" | head -n 1)
+          if [ -z "$ZIP_FILE" ]; then
+            echo "ERRORE: Nessun file .zip trovato nel repository!"
+            exit 1
+          fi
+          unzip -q "$ZIP_FILE" -d extracted_zip
+          SRC_DIR=$(find extracted_zip -name "main.xul" -printf "%h\n" | head -n 1)
+
+          cp -r "$SRC_DIR/num" app/src/main/assets/
+          cp -r "$SRC_DIR/wth" app/src/main/assets/
+          cp -r "$SRC_DIR/wth2" app/src/main/assets/
+          cp "$SRC_DIR/Roboto-Regular.ttf" app/src/main/assets/
+          cp "$SRC_DIR/Roboto-Bold.ttf" app/src/main/assets/
+          cp "$SRC_DIR/na.jpg" app/src/main/assets/
+          cp "$SRC_DIR/refresh.png" app/src/main/assets/
+          cp "$SRC_DIR/time_dot.png" app/src/main/assets/
+          cp "$SRC_DIR/Icon.png" app/src/main/res/drawable/ic_launcher_s3.png
+          cp "$SRC_DIR/Default.png" app/src/main/res/drawable/widget_preview.png
+
+          # settings.gradle
+          cat << 'EOF' > settings.gradle
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          rootProject.name = "S3WeatherWidget"
+          include ':app'
+          EOF
+
+          # gradle.properties
+          cat << 'EOF' > gradle.properties
+          android.useAndroidX=true
+          org.gradle.jvmargs=-Xmx2048m
+          EOF
+
+          # build.gradle (root)
+          cat << 'EOF' > build.gradle
+          plugins {
+              id 'com.android.application' version '8.5.2' apply false
+              id 'org.jetbrains.kotlin.android' version '1.9.24' apply false
+          }
+          EOF
+
+          # app/build.gradle
+          cat << 'EOF' > app/build.gradle
+          plugins {
+              id 'com.android.application'
+              id 'org.jetbrains.kotlin.android'
+          }
+
+          android {
+              namespace 'com.example.s3weatherwidget'
+              compileSdk 34
+
+              defaultConfig {
+                  applicationId "com.example.s3weatherwidget"
+                  minSdk 26
+                  targetSdk 34
+                  versionCode 1
+                  versionName "2.0.0"
+              }
+
+              aaptOptions {
+                  cruncherEnabled = false
+              }
+
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_17
+                  targetCompatibility JavaVersion.VERSION_17
+              }
+              kotlinOptions {
+                  jvmTarget = '17'
+              }
+          }
+
+          dependencies {
+              implementation 'androidx.core:core-ktx:1.13.1'
+              implementation 'androidx.appcompat:appcompat:1.7.0'
+              implementation 'androidx.work:work-runtime-ktx:2.9.1'
+              implementation 'com.google.android.gms:play-services-location:21.3.0'
+              implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.8.1'
+          }
+          EOF
+
+          # AndroidManifest.xml
+          cat << 'EOF' > app/src/main/AndroidManifest.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+              <uses-permission android:name="android.permission.INTERNET" />
+              <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+              <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+              <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
+
+              <application
+                  android:allowBackup="true"
+                  android:icon="@drawable/ic_launcher_s3"
+                  android:label="Galaxy S3 Weather"
+                  android:supportsRtl="true"
+                  android:theme="@style/Theme.AppCompat.Light.NoActionBar">
+
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+
+                  <receiver
+                      android:name=".S3WeatherWidget"
+                      android:exported="true"
+                      android:label="Galaxy S3 Weather HD">
+                      <intent-filter>
+                          <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+                          <action android:name="com.example.s3weatherwidget.ACTION_REFRESH" />
+                      </intent-filter>
+                      <meta-data
+                          android:name="android.appwidget.provider"
+                          android:resource="@xml/widget_s3_weather_info" />
+                  </receiver>
+
+              </application>
+          </manifest>
+          EOF
+
+          # res/xml/widget_s3_weather_info.xml
+          cat << 'EOF' > app/src/main/res/xml/widget_s3_weather_info.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+              android:initialLayout="@layout/widget_s3_weather"
+              android:minWidth="250dp"
+              android:minHeight="110dp"
+              android:targetCellWidth="4"
+              android:targetCellHeight="2"
+              android:previewImage="@drawable/widget_preview"
+              android:resizeMode="horizontal|vertical"
+              android:updatePeriodMillis="1800000"
+              android:widgetCategory="home_screen" />
+          EOF
+
+          # res/layout/widget_s3_weather.xml
+          cat << 'EOF' > app/src/main/res/layout/widget_s3_weather.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+              android:layout_width="match_parent"
+              android:layout_height="match_parent">
+
+              <ImageView
+                  android:id="@+id/img_widget_canvas"
+                  android:layout_width="match_parent"
+                  android:layout_height="match_parent"
+                  android:scaleType="fitCenter"
+                  android:src="@drawable/widget_preview"
+                  android:contentDescription="Galaxy S3 Weather HD" />
+
+              <LinearLayout
+                  android:layout_width="match_parent"
+                  android:layout_height="match_parent"
+                  android:orientation="horizontal"
+                  android:weightSum="4">
+
+                  <View
+                      android:id="@+id/hotspot_gps"
+                      android:layout_width="0dp"
+                      android:layout_height="match_parent"
+                      android:layout_weight="3" />
+
+                  <View
+                      android:id="@+id/hotspot_refresh"
+                      android:layout_width="0dp"
+                      android:layout_height="match_parent"
+                      android:layout_weight="1" />
+              </LinearLayout>
+          </FrameLayout>
+          EOF
+
+          # S3CanvasRenderer.kt
+          cat << 'EOF' > app/src/main/java/com/example/s3weatherwidget/S3CanvasRenderer.kt
+          package com.example.s3weatherwidget
+
+          import android.content.Context
+          import android.graphics.*
+          import java.text.SimpleDateFormat
+          import java.util.*
+
+          object S3CanvasRenderer {
+              fun renderWidgetBitmap(
+                  context: Context,
+                  city: String,
+                  condition: String,
+                  temp: String,
+                  iconCode: Int?,
+                  lastUpdate: String
+              ): Bitmap {
+                  val bmp = Bitmap.createBitmap(710, 410, Bitmap.Config.ARGB_8888)
+                  val canvas = Canvas(bmp)
+                  val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+
+                  val bgPath = if (iconCode != null && iconCode > 0) "wth/$iconCode.jpg" else "na.jpg"
+                  val bgBitmap = loadAssetBitmap(context, bgPath) ?: loadAssetBitmap(context, "na.jpg")
+                  bgBitmap?.let {
+                      canvas.drawBitmap(it, null, RectF(5f, 5f, 705f, 405f), paint)
+                  }
+
+                  val cal = Calendar.getInstance()
+                  val hour24 = cal.get(Calendar.HOUR_OF_DAY)
+                  val minute = cal.get(Calendar.MINUTE)
+
+                  val hTens = hour24 / 10
+                  val hOnes = hour24 % 10
+                  val mTens = minute / 10
+                  val mOnes = minute % 10
+
+                  if (hTens > 0) {
+                      loadAssetBitmap(context, "num/1$hTens.png")?.let {
+                          canvas.drawBitmap(it, null, RectF(137f, 49f, 239f, 181f), paint)
+                      }
+                  }
+                  loadAssetBitmap(context, "num/$hOnes.png")?.let {
+                      canvas.drawBitmap(it, null, RectF(227f, 49f, 329f, 181f), paint)
+                  }
+                  loadAssetBitmap(context, "time_dot.png")?.let {
+                      canvas.drawBitmap(it, null, RectF(323f, 49f, 373f, 181f), paint)
+                  }
+                  loadAssetBitmap(context, "num/$mTens.png")?.let {
+                      canvas.drawBitmap(it, null, RectF(371f, 49f, 473f, 181f), paint)
+                  }
+                  loadAssetBitmap(context, "num/$mOnes.png")?.let {
+                      canvas.drawBitmap(it, null, RectF(473f, 49f, 575f, 181f), paint)
+                  }
+
+                  val robotoReg = Typeface.createFromAsset(context.assets, "Roboto-Regular.ttf")
+                  val robotoBold = Typeface.createFromAsset(context.assets, "Roboto-Bold.ttf")
+
+                  val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                      color = Color.WHITE
+                      setShadowLayer(4f, 0f, 2f, Color.argb(150, 0, 0, 0))
+                  }
+
+                  val dateStr = SimpleDateFormat("EEE, d. MMM", Locale.getDefault()).format(cal.time)
+                  textPaint.typeface = Typeface.create(robotoReg, Typeface.BOLD)
+                  textPaint.textSize = 38f
+                  textPaint.textAlign = Paint.Align.LEFT
+                  canvas.drawText(dateStr, 206f, 222f, textPaint)
+
+                  if (iconCode != null && iconCode > 0) {
+                      loadAssetBitmap(context, "wth2/$iconCode.png")?.let {
+                          canvas.drawBitmap(it, null, RectF(558f, 208f, 677f, 277f), paint)
+                      }
+                  }
+
+                  textPaint.typeface = robotoReg
+                  textPaint.textSize = 68f
+                  textPaint.textAlign = Paint.Align.RIGHT
+                  canvas.drawText(temp, 118f, 355f, textPaint)
+
+                  textPaint.textAlign = Paint.Align.LEFT
+                  textPaint.textSize = 56f
+                  canvas.drawText("°", 120f, 340f, textPaint)
+                  textPaint.textSize = 46f
+                  canvas.drawText("C", 142f, 355f, textPaint)
+
+                  textPaint.typeface = Typeface.create(robotoReg, Typeface.BOLD)
+                  textPaint.textSize = 28f
+                  textPaint.textAlign = Paint.Align.RIGHT
+                  canvas.drawText(city, 688f, 316f, textPaint)
+
+                  textPaint.typeface = robotoBold
+                  textPaint.textSize = 28f
+                  canvas.drawText(condition, 688f, 352f, textPaint)
+
+                  textPaint.typeface = Typeface.create(robotoReg, Typeface.BOLD)
+                  textPaint.textSize = 19f
+                  textPaint.textAlign = Paint.Align.LEFT
+                  canvas.drawText("AccuWeather.com", 39f, 388f, textPaint)
+
+                  textPaint.typeface = robotoReg
+                  textPaint.textSize = 24f
+                  textPaint.textAlign = Paint.Align.RIGHT
+                  canvas.drawText(lastUpdate, 638f, 390f, textPaint)
+
+                  loadAssetBitmap(context, "refresh.png")?.let {
+                      canvas.drawBitmap(it, null, RectF(645f, 356f, 682f, 398f), paint)
+                  }
+
+                  return bmp
+              }
+
+              private fun loadAssetBitmap(context: Context, path: String): Bitmap? {
+                  return try {
+                      context.assets.open(path).use { BitmapFactory.decodeStream(it) }
+                  } catch (e: Exception) {
+                      null
+                  }
+              }
+          }
+          EOF
+
+          # WeatherUpdateWorker.kt
+          cat << 'EOF' > app/src/main/java/com/example/s3weatherwidget/WeatherUpdateWorker.kt
+          package com.example.s3weatherwidget
+
+          import android.Manifest
+          import android.annotation.SuppressLint
+          import android.app.PendingIntent
+          import android.appwidget.AppWidgetManager
+          import android.content.ComponentName
+          import android.content.Context
+          import android.content.Intent
+          import android.content.pm.PackageManager
+          import android.location.Geocoder
+          import android.location.Location
+          import android.widget.RemoteViews
+          import androidx.core.content.ContextCompat
+          import androidx.work.CoroutineWorker
+          import androidx.work.WorkerParameters
+          import com.google.android.gms.location.LocationServices
+          import com.google.android.gms.location.Priority
+          import com.google.android.gms.tasks.CancellationTokenSource
+          import kotlinx.coroutines.Dispatchers
+          import kotlinx.coroutines.tasks.await
+          import kotlinx.coroutines.withContext
+          import org.json.JSONObject
+          import java.net.HttpURLConnection
+          import java.net.URL
+          import java.text.SimpleDateFormat
+          import java.util.*
+
+          class WeatherUpdateWorker(
+              private val context: Context,
+              workerParams: WorkerParameters
+          ) : CoroutineWorker(context, workerParams) {
+
+              override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
+                  if (!hasLocationPermission()) {
+                      saveAndRender(context, "Tocca qui per GPS", "Permesso richiesto", "--", -1)
+                      return@withContext Result.failure()
+                  }
+
+                  try {
+                      val location = getDeviceLocation()
+                      val lat = location?.latitude ?: 41.89
+                      val lon = location?.longitude ?: 12.49
+                      val cityName = if (location != null) getCityName(lat, lon) else "Roma"
+
+                      val apiUrl = "https://api.open-meteo.com/v1/forecast?latitude=$lat&longitude=$lon&current=temperature_2m,is_day,weather_code&timezone=auto"
+                      val connection = URL(apiUrl).openConnection() as HttpURLConnection
+                      connection.connectTimeout = 10000
+                      connection.readTimeout = 10000
+
+                      val response = connection.inputStream.bufferedReader().use { it.readText() }
+                      val json = JSONObject(response).getJSONObject("current")
+
+                      val temp = Math.round(json.getDouble("temperature_2m")).toString()
+                      val isDay = json.getInt("is_day") == 1
+                      val wmoCode = json.getInt("weather_code")
+
+                      val (s3Code, condText) = mapWmoToS3(wmoCode, isDay)
+                      saveAndRender(context, cityName, condText, temp, s3Code)
+                      Result.success()
+                  } catch (e: Exception) {
+                      e.printStackTrace()
+                      renderFromPrefs(context)
+                      Result.retry()
+                  }
+              }
+
+              private fun hasLocationPermission(): Boolean {
+                  return ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
+                         ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+              }
+
+              @SuppressLint("MissingPermission")
+              private suspend fun getDeviceLocation(): Location? {
+                  val fusedClient = LocationServices.getFusedLocationProviderClient(context)
+                  return try {
+                      fusedClient.getCurrentLocation(
+                          Priority.PRIORITY_BALANCED_POWER_ACCURACY,
+                          CancellationTokenSource().token
+                      ).await() ?: fusedClient.lastLocation.await()
+                  } catch (e: Exception) {
+                      try { fusedClient.lastLocation.await() } catch (ex: Exception) { null }
+                  }
+              }
+
+              @Suppress("DEPRECATION")
+              private fun getCityName(lat: Double, lon: Double): String {
+                  return try {
+                      val geocoder = Geocoder(context, Locale.getDefault())
+                      val addresses = geocoder.getFromLocation(lat, lon, 1)
+                      if (!addresses.isNullOrEmpty()) {
+                          val a = addresses[0]
+                          a.locality ?: a.subAdminArea ?: a.adminArea ?: "GPS Attivo"
+                      } else "GPS Attivo"
+                  } catch (e: Exception) {
+                      "GPS Attivo"
+                  }
+              }
+
+              private fun mapWmoToS3(wmoCode: Int, isDay: Boolean): Pair<Int, String> {
+                  return when (wmoCode) {
+                      0 -> (if (isDay) 1 else 33) to "Sereno"
+                      1 -> (if (isDay) 2 else 34) to "Prevalentemente sereno"
+                      2 -> (if (isDay) 3 else 35) to "Parzialmente nuvoloso"
+                      3 -> (if (isDay) 7 else 38) to "Nuvoloso"
+                      45, 48 -> 11 to "Nebbia"
+                      51, 53, 55 -> (if (isDay) 12 else 39) to "Pioggerella"
+                      56, 57, 66, 67 -> 26 to "Pioggia gelata"
+                      61, 63 -> (if (isDay) 14 else 40) to "Pioggia"
+                      65 -> 18 to "Pioggia forte"
+                      71, 73, 75, 77 -> (if (isDay) 22 else 44) to "Neve"
+                      80, 81, 82 -> (if (isDay) 13 else 39) to "Rovesci"
+                      85, 86 -> (if (isDay) 21 else 43) to "Rovesci di neve"
+                      95, 96, 99 -> (if (isDay) 15 else 41) to "Temporale"
+                      else -> (if (isDay) 4 else 36) to "Variabile"
+                  }
+              }
+
+              companion object {
+                  fun saveAndRender(context: Context, city: String, cond: String, temp: String, code: Int) {
+                      val nowStr = SimpleDateFormat("dd/MM hh:mm a", Locale.getDefault()).format(Date())
+                      context.getSharedPreferences("s3_wth", Context.MODE_PRIVATE).edit()
+                          .putString("city", city)
+                          .putString("cond", cond)
